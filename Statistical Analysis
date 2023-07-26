@@ -1,0 +1,75 @@
+### Permanova (run and edit based on variables of interest)
+dist = phyloseq::distance(BEE_ps3.pruned_filt2, method="bray")
+metadata.ps3filt2 <- data.frame(sample_data(BEE_ps3.pruned_filt2))
+PCoA.adonis <- adonis2(dist  ~ Substrate, sqrt.dist = TRUE, data = BEE_ps3.pruned_filt2)
+PCoA.adonis 
+
+### Permutest(dispersion): Permutation test for homogeneity of multivariate dispersions
+dispersion <- betadisper(dist, group=metadata_ps3$Substrate)
+permutest(dispersion)
+plot(dispersion, hull=FALSE, ellipse=TRUE)
+
+### ANOSIM
+dist = phyloseq::distance(BEE_ps3.pruned_filt2, method="bray", binary = TRUE)
+metadata <- data.frame(sample_data(BEE_ps3.pruned_filt2))
+anosim(dist, metadata$Substrate)
+anosim(dist, metadata$Sampling.Event)
+anosim(dist.new, metadata$Period)
+
+### ANOSIM (of substrate) at each SE
+BEE_ps3.pruned_filt2.noSW <- BEE_ps3.pruned_filt2 %>% subset_samples(Substrate != "SW")
+BEE_ps3.pruned_filt2.noSW.noGlass <- BEE_ps3.pruned_filt2.noSW %>% subset_samples(Substrate != "GLASS")
+
+# NO SW or Glass
+BEE_SE1 = subset_samples(BEE_ps3.pruned_filt2.noSW.noGlass, Sampling.Event == "SE1")
+BEE_SE2 = subset_samples(BEE_ps3.pruned_filt2.noSW.noGlass, Sampling.Event == "SE2")
+BEE_SE3 = subset_samples(BEE_ps3.pruned_filt2.noSW.noGlass, Sampling.Event == "SE3")
+BEE_SE4 = subset_samples(BEE_ps3.pruned_filt2.noSW.noGlass, Sampling.Event == "SE4")
+BEE_SE5 = subset_samples(BEE_ps3.pruned_filt2.noSW.noGlass, Sampling.Event == "SE5")
+BEE_SE6 = subset_samples(BEE_ps3.pruned_filt2.noSW.noGlass, Sampling.Event == "SE6")
+
+# NO SW
+BEE_SE1 = subset_samples(BEE_ps3.pruned_filt2.noSW, Sampling.Event == "SE1")
+BEE_SE2 = subset_samples(BEE_ps3.pruned_filt2.noSW, Sampling.Event == "SE2")
+BEE_SE3 = subset_samples(BEE_ps3.pruned_filt2.noSW, Sampling.Event == "SE3")
+BEE_SE4 = subset_samples(BEE_ps3.pruned_filt2.noSW, Sampling.Event == "SE4")
+BEE_SE5 = subset_samples(BEE_ps3.pruned_filt2.noSW, Sampling.Event == "SE5")
+BEE_SE6 = subset_samples(BEE_ps3.pruned_filt2.noSW, Sampling.Event == "SE6")
+
+# w/ SW % Glass
+BEE_SE1 = subset_samples(BEE_ps3.pruned_filt2, Sampling.Event == "SE1")
+BEE_SE2 = subset_samples(BEE_ps3.pruned_filt2, Sampling.Event == "SE2")
+BEE_SE3 = subset_samples(BEE_ps3.pruned_filt2, Sampling.Event == "SE3")
+BEE_SE4 = subset_samples(BEE_ps3.pruned_filt2, Sampling.Event == "SE4")
+BEE_SE5 = subset_samples(BEE_ps3.pruned_filt2, Sampling.Event == "SE5")
+BEE_SE6 = subset_samples(BEE_ps3.pruned_filt2, Sampling.Event == "SE6")
+
+#SE1
+dist.SE1 = phyloseq::distance(BEE_SE1, method="bray", binary = TRUE)
+metadata.SE1 <- data.frame(sample_data(BEE_SE1))
+anosim(dist.SE1, metadata.SE1$Substrate)
+
+#SE2
+dist.SE2 = phyloseq::distance(BEE_SE2, method="bray", binary = TRUE)
+metadata.SE2 <- data.frame(sample_data(BEE_SE2))
+anosim(dist.SE2, metadata.SE2$Substrate)
+
+#SE3
+dist.SE3 = phyloseq::distance(BEE_SE3, method="bray", binary = TRUE)
+metadata.SE3 <- data.frame(sample_data(BEE_SE3))
+anosim(dist.SE3, metadata.SE3$Substrate)
+
+#SE4
+dist.SE4 = phyloseq::distance(BEE_SE4, method="bray", binary = TRUE)
+metadata.SE4 <- data.frame(sample_data(BEE_SE4))
+anosim(dist.SE4, metadata.SE4$Substrate)
+
+#SE5
+dist.SE5 = phyloseq::distance(BEE_SE5, method="bray", binary = TRUE)
+metadata.SE5 <- data.frame(sample_data(BEE_SE5))
+anosim(dist.SE5, metadata.SE5$Substrate)
+
+#SE6
+dist.SE6 = phyloseq::distance(BEE_SE6, method="bray", binary = TRUE)
+metadata.SE6 <- data.frame(sample_data(BEE_SE6))
+anosim(dist.SE6, metadata.SE6$Substrate)
