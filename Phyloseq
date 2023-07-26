@@ -1,0 +1,326 @@
+# Hand off to Phyloseq from DADA2
+
+# load libraries
+library(phyloseq)
+library(ggplot2)
+library(vegan)
+library(Biostrings)
+library(tidyverse)
+library(gridExtra)
+library(RColorBrewer)
+library(dplyr)
+library(car)
+library(stringr)
+
+# Import metadata file
+metadata <- read.csv(file = "Path to metadata.csv")
+
+# ... or Construct a metadata data frame: 
+samples.out <- rownames(seqtab.nochim)
+sample_metadata<-data.frame(cbind(sapply(strsplit(samples.out, "_"), `[`, 1),
+                                  sapply(strsplit(samples.out, "_"), `[`, 2),
+                                  sapply(strsplit(samples.out, "_"), `[`, 3),
+                                  sapply(strsplit(samples.out, "_"), `[`, 4)))
+
+colnames(sample_metadata)[1] <- "Substrate"
+colnames(sample_metadata)[2] <- "Replicate"
+colnames(sample_metadata)[3] <- "Sampling.Event"
+colnames(sample_metadata)[4] <- "Sample.Number"
+rownames(sample_metadata) <- samples.out
+sample_metadata
+
+### Create a phyloseq object
+BEE_ps3 <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE), 
+               sample_data(sample_metadata), 
+               tax_table(taxa))
+
+sample_data(BEE_ps3) <- BEE_ps3 %>% 
+  sample_data() %>%
+  data.frame() %>%
+  mutate(Ecology = if_else(sample_metadata$Substrate=="SW", "freeliving", "attached"),
+         Period = if_else(sample_metadata$Sampling.Event<="SE3", "early", "late")
+         #Day = if_else(),
+         #sample = paste0(sample_metadata$Substrate,sample_metadata$Replicate)
+         )
+
+# Add read depth
+sample_data(BEE_ps3)$Read_depth <- sample_sums(BEE_ps3)
+
+## Add Normalized Seawater Parameter data to PS metadata
+water.params <- read.csv("~/Path to Metadata_SWParams_Norm.csv")
+water.params <- water.params[,-c(11:27)]
+water.params <- water.params[-c(73:1000),]
+
+# Turn into `sample_data` 
+sam.new <- sample_data(water.params)
+rownames(sam.new) <- sample_names(BEE21_ps3)
+
+# Merge into ps
+BEE21.ps3.pruned.filt2.params.fix <- merge_phyloseq(BEE21_ps3.pruned.filt2.fixed, sam.new, by = "Sampling.Event")
+
+# View distribution of sample read counts
+sample_sum_df <- data.frame(sum = sample_sums(BEE_ps3))
+ggplot(sample_sum_df, aes(x = sum)) + 
+  geom_histogram(color = "black", fill = "indianred", binwidth = 2500) +
+  ggtitle("Distribution of sample sequencing depth") + 
+  xlab("Read counts") +
+  theme(axis.title.y = element_blank())
+
+# Remove missing samples and filter (taxa not present in at least Two samples will be removed)
+removed_low_counts <- names(which(sample_sums(BEE_ps3) < 30000))
+length(removed_low_counts)
+sample_sum_data <- data.frame(id = sample_names(BEE_ps3), pre_filter = sample_sums(BEE_ps3))
+taxa_sum_data <- data.frame(taxa = taxa_names(BEE_ps3), pre_filter = taxa_sums(BEE_ps3) > 0)
+
+# sample_sum_data
+BEE_ps3.pruned <- BEE_ps3 %>%
+  subset_samples(sample_sums(BEE_ps3) > 30000)
+richness_data <- estimate_richness(BEE_ps3.pruned) %>% as_tibble(rownames = "Sample")
+sample_sum_data <- sample_sum_data %>%
+  merge(data.frame(id = sample_names(BEE_ps3.pruned),
+                   low_count_removed = sample_sums(BEE_ps3.pruned)),  
+        by = 'id',  all.x = TRUE)
+taxa_sum_data <- taxa_sum_data %>%
+  merge(data.frame(taxa = taxa_names(BEE_ps3.pruned), 
+                   low_count_removed = taxa_sums(BEE_ps3.pruned) > 0), 
+        by = 'taxa', all.x = TRUE)
+
+# remove zero count taxa
+keeps <- taxa_names(BEE_ps3.pruned)[which(taxa_sums(BEE_ps3.pruned) > 0)]
+ps.sub <- prune_taxa(keeps, BEE_ps3.pruned)
+ps.sub.otus <- ps.sub %>% otu_table() %>% data.frame() %>% t()
+
+# remove Mitochondria, Chloroplast
+ps.sub <- ps.sub %>%
+  subset_taxa(
+    Kingdom %in% c('Bacteria', 'Archaea') &
+    !Family %in% c('Mitochondria') &
+    !Order %in% c('Chloroplast')
+  )
+sample_sum_data <- sample_sum_data %>%
+  merge(data.frame(id = sample_names(ps.sub),
+                   euk_contam_removed = sample_sums(ps.sub)),  
+        by = 'id',  all.x = TRUE)
+taxa_sum_data <- taxa_sum_data %>%
+  merge(data.frame(taxa = taxa_names(ps.sub), 
+                   euk_contam_removed = taxa_sums(ps.sub) > 0), 
+        by = 'taxa', all.x = TRUE)
+
+# Remove NA from Genus (tax_fix)
+library(microViz)
+BEE_ps3.pruned <- BEE_ps3.pruned %>% microViz::tax_fix(unknowns = c("NA_Genus", "Unknown Family_Genus", "Unknown Family Family", "Unknown Family", "Unknown Family_Genus Genus", "Unknown Family_Genus Genus Species", "Unknown"))
+
+# Prevalence filtering to 2 samples (due to low reads in various biological replicates)
+prevThreshold <- 2
+
+# Compute prevalence of each feature, store as data.frame
+prevdf <- apply(X = otu_table(ps.sub),
+               MARGIN = ifelse(taxa_are_rows(ps.sub), yes = 1, no = 2),
+               FUN = function(x){sum(x > 0)})
+
+# Add taxonomy and total read counts to this data.frame
+prevdf <- data.frame(Prevalence = prevdf,
+                    TotalAbundance = taxa_sums(ps.sub),
+                    tax_table(ps.sub))
+keepTaxa <- rownames(prevdf)[(prevdf$Prevalence >= prevThreshold)]
+removeTaxa <- rownames(prevdf)[(prevdf$Prevalence < prevThreshold)]
+BEE_ps3.pruned_filt <- prune_taxa(keepTaxa, ps.sub)
+saveRDS(BEE_ps3.pruned_filt2, "BEE21_ps3.pruned.filt2.rds")
+
+# Assigning ASVs to OTU Sequences
+names.ps <- as.data.frame(cbind(taxa_names(BEE_ps3.pruned_filt2),
+                                paste0("ASV", seq(ntaxa(BEE_ps3.pruned_filt2)))),
+                          stringsAsFactors=F)
+colnames(names.ps) <- c('seq', 'asv')
+taxa_names(BEE_ps3.pruned_filt2) <- names.ps$asv
+asvs <- otu_table(BEE_ps3.pruned_filt2) %>%
+  data.frame() %>%
+  as_tibble(rownames = 'Sample')
+asvs.long <- asvs %>%
+  pivot_longer(-Sample, names_to = "ASV", values_to = "Abundance") %>%
+  mutate(ASV = naturalsort::naturalfactor(ASV))
+tax_table(BEE_ps3.pruned_filt2) %>%
+  data.frame() %>%
+  as_tibble(rownames = "ASV")
+
+# Add ASV to rank
+BEE_ps3.pruned_filt2 <- tax_names2rank(BEE_ps3.pruned_filt2, colname = "ASV")
+
+### Exploratory figures: visualize alpha diversity 
+Shannon_alphaD_BEE21_ps3 <- plot_richness(BEE_ps3.pruned_filt2, x="Day", 
+              measures = c("Shannon"), 
+              color = "Substrate", 
+              shape = "Ecology") +
+  theme_gray(base_size = 12)
+             
+Shannon_alphaD_BEE21_ps3 %>% ggsave(filename = "Shannon_alphaD_BEE21_ps3.png", device = png, dpi = 600)
+
+### Exploratory figures: visualize Beta diversity 
+install.packages("devtools")
+devtools::install_github("david-barnett/microViz")
+install.packages(corncob)
+library(microViz); library(corncob)
+
+microViz::ord_explore(BEE_ps3.pruned_filt2)
+
+Bray_PCoA_Comp_ps3filt2 <- BEE_ps3.pruned_filt2 %>%
+tax_transform(rank = "unique", trans = "compositional") %>%
+ dist_calc(dist = "bray") %>%
+ ord_calc(
+  method = "PCoA"
+ ) %>% 
+ ord_plot(
+  axes = c(1, 2),
+  colour = "Day", fill = "Day",
+  shape = "Substrate", alpha = 0.5,
+  size = 1, auto_caption = NA) + 
+  theme_gray(base_size = 12) +
+ scale_shape_girafe_filled() +
+ ggplot2::stat_ellipse(
+  ggplot2::aes(colour = Day)
+ )
+Bray_PCoA_Comp_ps3filt2
+
+ggsave(Bray_PCoA_Comp_ps3filt2, filename = "Bray_PCoA_Comp_ps3filt2.png", dpi = 600, path = "Insert Path")
+
+### Relative Abundance Bar charts 
+# Subset samples for easier comparisons
+BEE_ps3.pruned.filt2.noWater.sub <- subset_samples(BEE_ps3.pruned_filt2, Substrate != "SW")
+BEE_ps3.pruned.filt2.Water.sub <- subset_samples(BEE_ps3.pruned_filt2, Substrate == "SW")
+BEE_ps3.pruned.filt2.noWater.early.sub <- subset_samples(BEE_ps3.pruned.filt2.noWater.sub, Sampling.Event <= "SE3")
+BEE_ps3.pruned.filt2.noWater.late.sub <- subset_samples(BEE_ps3.pruned.filt2.noWater.sub, Sampling.Event >= "SE4")
+
+# View top 20 abundant ASVs 
+top20 <- names(sort(taxa_sums(BEE_ps3.pruned_filt2), decreasing=TRUE))[1:20]
+ps.top20 <- transform_sample_counts(BEE_ps3.pruned_filt2, function(OTU) OTU/sum(OTU))
+ps.top20 <- prune_taxa(top20, ps.top20)
+top20.Genus <- plot_bar(ps.top20, x="Sampling.Event", fill="Genus") + facet_wrap(~Substrate, scales="free_x")
+top20.Family <- plot_bar(ps.top20, x="Sampling.Event", fill="Family") + facet_wrap(~Substrate, scales="free_x")
+top20.Order <- plot_bar(ps.top20, x="Sampling.Event", fill="Order") + facet_wrap(~Substrate, scales="free_x")
+top20.Class <- plot_bar(ps.top20, x="Sampling.Event", fill="Class") + facet_wrap(~Substrate, scales="free_x")
+top20.Phylum <- plot_bar(ps.top20, x="Sampling.Event", fill="Phylum") + facet_wrap(~Substrate, scales="free_x")
+
+top20_materials <- names(sort(taxa_sums(BEE_ps3.pruned_filt2.noWater.sub), decreasing=TRUE))[1:20]
+ps.top20_materials <- transform_sample_counts(BEE_ps3.pruned_filt2.noWater.sub, function(OTU) OTU/sum(OTU))
+ps.top20_materials <- prune_taxa(top20_Water, ps.top20_Water)
+top20.materials.Genus <- plot_bar(ps.top20_materials, x="Sampling.Event", fill="Genus") + facet_wrap(~Substrate, scales="free_x")
+top20.materials.Family <- plot_bar(ps.top20_materials, x="Sampling.Event", fill="Family") + facet_wrap(~Substrate, scales="free_x")
+top20.materials.Order <- plot_bar(ps.top20_materials, x="Sampling.Event", fill="Order") + facet_wrap(~Substrate, scales="free_x")
+top20.materials.Class <- plot_bar(ps.top20_materials, x="Sampling.Event", fill="Class") + facet_wrap(~Substrate, scales="free_x")
+top20.materials.Phylum <- plot_bar(ps.top20_materials, x="Sampling.Event", fill="Phylum") + facet_wrap(~Substrate, scales="free_x")
+
+top20_Water <- names(sort(taxa_sums(BEE_ps3.pruned_filt2.Water.sub), decreasing=TRUE))[1:20]
+ps.top20_Water <- transform_sample_counts(BEE_ps3.pruned_filt2.Water.sub, function(OTU) OTU/sum(OTU))
+ps.top20_Water <- prune_taxa(top20_Water, ps.top20_Water)
+top20.Water.Genus <- plot_bar(ps.top20_Water, x="Sampling.Event", fill="Genus") + facet_wrap(~Substrate, scales="free_x")
+top20.Water.Family <- plot_bar(ps.top20_Water, x="Sampling.Event", fill="Family") + facet_wrap(~Substrate, scales="free_x")
+top20.Water.Order <- plot_bar(ps.top20_Water, x="Sampling.Event", fill="Order") + facet_wrap(~Substrate, scales="free_x")
+top20.Water.Class <- plot_bar(ps.top20_Water, x="Sampling.Event", fill="Class") + facet_wrap(~Substrate, scales="free_x")
+top20.Water.Phylum <- plot_bar(ps.top20_Water, x="Sampling.Event", fill="Phylum") + facet_wrap(~Substrate, scales="free_x")
+
+# Abundance bar plot for Phylum level (Shows abundance of all phyla >1% for each substrate type by sampling event)
+ps.rel = transform_sample_counts(BEE_ps3.pruned_filt2, function(x) x/sum(x)*100)
+# agglomerate taxa
+glom <- tax_glom(ps.rel, taxrank = 'Phylum', NArm = FALSE)
+ps.melt <- psmelt(glom)
+# change to character for easy-adjusted level
+ps.melt$Phylum <- as.character(ps.melt$Phylum)
+
+ps.melt <- ps.melt %>%
+  group_by(Sampling.Event, Phylum) %>%
+  mutate(median=median(Abundance))
+
+ps.melt <- ps.melt %>% mutate(Sampling.Event = factor(Sampling.Event, levels = c("SE1", "SE2", "SE3", "SE4", "SE5", "SE6"))) %>% mutate(Day = recode_factor(Sampling.Event, SE0 = "Day 0", SE1 = "Day 14", SE2 = "Day 28", SE3 = "Day 42", SE4 = "Day 56", SE5 = "Day 70", SE6 = "Day 77"))
+
+# select group median > 1
+keep1 <- unique(ps.melt$Phylum[ps.melt$median > 1])
+ps.melt$Phylum[!(ps.melt$Phylum %in% keep1)] <- "< 1%"
+#to get the same rows together
+ps.melt_sum <- ps.melt %>%
+  group_by(Sample,Substrate,Sampling.Event,Phylum) %>%
+  summarise(Abundance=sum(Abundance))
+
+Phylum_Abund_Chart<- ggplot(ps.melt_sum, aes(x = Sample, y = Abundance, fill = Phylum)) + 
+  geom_bar(stat = "identity", aes(fill=Phylum)) + 
+  labs(x="", y="Abundance (%)") +
+  facet_wrap(~Sampling.Event, scales= "free_x", nrow=1) +
+  theme_classic() + 
+  theme(strip.background = element_blank(), 
+        axis.text.x.bottom = element_text(angle = -90)) 
+Phylum_Abund_Chart
+ggsave("Phylum_Abund_Chart.png", Phylum_Abund_Chart, height = 12, width = 6, dpi = 450)
+
+# Abundance bar plot for Class level (Shows abundance of all phyla >5% for each substrate type by sampling event)
+ps.rel = transform_sample_counts(BEE_ps3.pruned_filt2, function(x) x/sum(x)*100)
+# agglomerate taxa
+glom <- tax_glom(ps.rel, taxrank = 'Class', NArm = FALSE)
+ps.melt <- psmelt(glom)
+# change to character for easy-adjusted level
+ps.melt$Class <- as.character(ps.melt$Class)
+
+ps.melt <- ps.melt %>%
+  group_by(Sampling.Event,Class) %>%
+  mutate(median=median(Abundance))
+
+# select group mean > 1
+keep <- unique(ps.melt$Class[ps.melt$median > 5])
+ps.melt$Class[!(ps.melt$Class %in% keep)] <- "< 5%"
+#to get the same rows together
+ps.melt_sum <- ps.melt %>%
+  group_by(Sample,Substrate,Sampling.Event,Class) %>%
+  summarise(Abundance=sum(Abundance))
+ 
+barchart_Class <- ggplot(ps.melt_sum, aes(x = Sample, y = Abundance, fill = Class)) + 
+  geom_bar(stat = "identity", aes(fill=Class)) + 
+  labs(x="", y="%") +
+  facet_wrap(~Sampling.Event, scales= "free_x", nrow=1) +
+  theme_classic() + 
+  theme(legend.position = "right", 
+        strip.background = element_blank(), 
+        axis.text.x.bottom = element_text(angle = -90))
+barchart_Class
+
+# Relative abundance Family bar chart
+ps.rel = transform_sample_counts(BEE_ps3.pruned_filt2, function(x) x/sum(x)*100)
+# agglomerate taxa
+glom <- tax_glom(ps.rel, taxrank = 'ASV', NArm = FALSE)
+ps.melt <- psmelt(glom)
+# change to character for easy-adjusted level
+ps.melt$Family <- as.character(ps.melt$Family)
+ps.melt$ASV <- as.character(ps.melt$ASV)
+
+ps.melt <- ps.melt %>%
+  group_by(Sampling.Event, Family, Genus, ASV) %>%
+  mutate(median=median(Abundance))
+
+ps.melt <- ps.melt %>% mutate(Sampling.Event = factor(Sampling.Event, levels = c("SE1", "SE2", "SE3", "SE4", "SE5", "SE6"))) %>% mutate(Day = recode_factor(Sampling.Event, SE0 = "Day 0", SE1 = "Day 14", SE2 = "Day 28", SE3 = "Day 42", SE4 = "Day 56", SE5 = "Day 70", SE6 = "Day 77"))
+ps.melt <- ps.melt %>% mutate(samples = paste0(Substrate," ", "(",Replicate,")"))
+
+# select group mean > 1
+keep <- unique(ps.melt$Family[ps.melt$median > 5])
+ps.melt$Family[!(ps.melt$Family %in% keep)] <- "< 5%"
+#to get the same rows together
+ps.melt_sum <- ps.melt %>%
+  group_by(samples,Replicate,Substrate,Day,Family) %>%
+  summarise(Abundance=sum(Abundance))
+ 
+barchart_Family <- ggplot(ps.melt_sum, aes(x = samples, y = (Abundance), fill = Family)) + 
+  geom_bar(stat = "identity", aes(fill=Family)) + 
+  labs(x="", y="Relative Abundance (%)") +
+  facet_wrap(~Day, scales= "free_x", nrow=1) +
+  theme_classic() + 
+  theme(legend.position = "bottom", 
+        strip.background = element_blank(), 
+        axis.text.x.bottom = element_text(angle = 90))
+barchart_Family
+
+### Combining Alpha Diversity, Beta Diversity figures and Relative Abundance Bar Charts
+library("cowplot")
+diversity_plots_Combined <- ggdraw() +
+  draw_plot(Shannon_alphaD_BEE21_ps3, x = 0, y = .5, width = .5, height = .5) +
+  draw_plot(Bray_PCoA_Comp_ps3filt2, x = .5, y = .5, width = .5, height = .5) +
+  draw_plot(barchart_Family, x = 0, y = 0, width = 1, height = 0.5) +
+  draw_plot_label(label = c("A", "B", "C"), size = 15,
+                  x = c(0, 0.5, 0), y = c(1, 1, 0.5))       
+  
+ggsave2(diversity_plots_Combined, filename = "diversity_plots_Combined.png", dpi = 600, path = "Insert path")
