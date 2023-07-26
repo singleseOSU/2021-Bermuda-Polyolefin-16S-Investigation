@@ -1,0 +1,516 @@
+### DESeq2 Differential Abundance Analysis
+
+# HDPE v. GLASS (SE2, 5 & 6) 
+ps3.filt2.HDPE_GLASS <- BEE_ps3.pruned_filt2 %>% subset_samples(Substrate != "LDPE") %>%
+  subset_samples(Substrate != "PP") %>%
+  subset_samples(Substrate != "SW")
+
+ps3.filt2.HDPE_GLASS_SEsub <- ps3.filt2.HDPE_GLASS %>% 
+  subset_samples(Sampling.Event != "SE1") %>% 
+ subset_samples(Sampling.Event != "SE3") %>%
+  subset_samples(Sampling.Event != "SE4")
+
+diagdds.HDPE.sub = phyloseq_to_deseq2(ps3.filt2.HDPE_GLASS_SEsub, ~ Substrate)
+
+# calculate geometric means prior to estimate size factors
+gm_mean = function(x, na.rm=TRUE){
+  exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))
+}
+geoMeans.H.all.sub = apply(counts(diagdds.HDPE.sub), 1, gm_mean)
+diagdds.HDPE.sub = estimateSizeFactors(diagdds.HDPE.sub, geoMeans = geoMeans.H.all.sub)
+diagdds.HDPE.sub <- estimateDispersions(diagdds.HDPE.sub)
+diagdds.HDPE.sub <- nbinomWaldTest(diagdds.HDPE.sub)
+diagdds.HDPE.sub = DESeq(diagdds.HDPE.sub, fitType="local")
+res.H.all.sub = results(diagdds.HDPE.sub, cooksCutoff = FALSE)
+
+colSums(counts(diagdds.HDPE.sub))
+colSums(counts(diagdds.HDPE.sub, normalized=T))
+
+resLFC.H.all.sub <- lfcShrink(diagdds.HDPE.sub, coef= "Substrate_HDPE_vs_GLASS",type="apeglm")
+resLFC.H.all.sub
+plotDispEsts(diagdds.HDPE.sub)
+
+alpha = 0.05
+sigtab.H.all.sub = res.H.all.sub[which(res.H.all.sub$padj < alpha), ]
+ASV = rownames(sigtab.H.all.sub)
+sigtab.H.all.sub <- cbind(sigtab.H.all.sub, ASV) 
+sigtab.H.all.sub = cbind(as(sigtab.H.all.sub, "data.frame"), as(tax_table(ps3.filt3.HDPE_GLASS)[rownames(sigtab.H.all.sub), ], "matrix"))
+sigtab.H.all.sub
+
+#select taxa that are at least 3 fold enriched
+colnames(sigtab.H.all.sub) <- c("Mean.Abundance", "log2FoldChange", "lfcSE", "stat", "pvalue", "padj", "ASV", "Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+posigtab.H.all.sub = sigtab.H.all.sub[sigtab.H.all.sub[, "log2FoldChange"] > 3, ]
+posigtab.H.all.sub = posigtab.H.all.sub[, c("Mean.Abundance", "log2FoldChange", "lfcSE", "padj", "Phylum", "Class", "Order", "Family", "Genus", "ASV")]
+
+library("ggplot2")
+sigtabgen.H.all.sub = subset(sigtab.H.all.sub, !is.na(Genus))
+# Phylum order
+x = tapply(sigtabgen.H.all.sub$log2FoldChange, sigtabgen.H.all.sub$Phylum, function(x) max(x))
+x = sort(x, TRUE)
+sigtabgen.H.all.sub$Phylum = factor(as.character(sigtabgen.H.all.sub$Phylum), levels=names(x))
+# Genus order
+x = tapply(sigtabgen.H.all.sub$log2FoldChange, sigtabgen.H.all.sub$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtabgen.H.all.sub$Genus = factor(as.character(sigtabgen.H.all.sub$Genus), levels=names(x))
+sigtabgen.H.all.sub = subset(sigtabgen.H.all.sub, padj < 0.05)
+#sigtab.H.all.sub$Taxa = paste0(sigtab.H.all.sub$Family, "_", sigtab.H.all.sub$Genus)
+
+#Create new variable (Lowest rank) for plotting
+#sigtab.H.all.sub$Genus <- sigtab.H.all.sub$Genus %>% str_replace_all(" Genus","")
+sigtab.H.all.sub$Genus <- sigtab.H.all.sub$Genus %>% str_replace_all("_"," ")
+sigtab.H.all.sub$Genus <- sigtab.H.all.sub$Genus %>% str_replace_all(" Genus","") %>% 
+  str_replace_all(" Family","") %>% 
+  str_replace_all(" Order","") %>% 
+  str_replace_all(" Class","") %>% 
+  str_replace_all(" Phylum","")
+
+sigtab.H.all.sub$Lowest_rank = ifelse(is.na(sigtab.H.all.sub$Genus), as.character(sigtab.H.all.sub$Family), ifelse(is.na(sigtab.H.all.sub$Family), as.character(sigtab.H.all.sub$Order), ifelse(is.na(sigtab.H.all.sub$Order), as.character(sigtab.H.all.sub$Class), ifelse(is.na(sigtab.H.all.sub$Class), as.character(sigtab.H.all.sub$Phylum), as.character(sigtab.H.all.sub$Genus)))))
+
+sigtab.H.all.sub$Lowest_rank = paste0(sigtab.H.all.sub$Lowest_rank," ", sigtab.H.all.sub$ASV)
+
+#sort taxa on sigtab
+# Phylum order
+x = tapply(sigtab.H.all.sub$log2FoldChange, sigtab.H.all.sub$Phylum, function(x) max(x))
+x = sort(x, TRUE)
+sigtab.H.all.sub$Phylum = factor(as.character(sigtab.H.all.sub$Phylum), levels=names(x))
+# Genus order
+x = tapply(sigtab.H.all.sub$log2FoldChange, sigtab.H.all.sub$Lowest_rank, function(x) max(x))
+x = sort(x, TRUE)
+sigtab.H.all.sub$Lowest_rank = factor(as.character(sigtab.H.all.sub$Lowest_rank), levels=names(x))
+sigtab.H.all.sub = subset(sigtab.H.all.sub, padj < 0.05)
+
+colors<-c("Firmicutes"="#009900","Bacteroidota"="#FF6666","Proteobacteria"="#3399FF", "Bdellovibrionota"="lightblue2", "Planctomycetota"="#c994c7", "Acidobacteriota"="mediumpurple4", "Verrucomicrobia"="#CD853F", "Actinobacteria"="#A0A0A0", "Cyanobacteria"="green4", "Campylobacteriota"="khaki4", "Desulfobacteriota"="midnightblue","Dadabacteria"="aquamarine4", "Fusobacteriota"="tomato4", "Myxococcota"="palevioletred", "Spirochaetota"="sienna","Patescibacteria"="slategrey", "Dependentiae"="slateblue3", "Deinococcota"="violet", "SAR324 clade(Marine group B)"="plum", "Gemmatimonadota"="yellow4","Chloroflexi"="springgreen1", "Calditrichota"="gold", "Latescibacterota"="firebrick", "WPS-2"="chartreuse","NB1-j"="darkseagreen","NA"="black")
+
+sigtab.H.all.sub <- sigtab.H.all.sub %>% mutate(Substrate = if_else(sigtab.H.all.sub$log2FoldChange < 0, "GLASS", "Polymer"))
+saveRDS(sigtab.H.all.sub, "sigtab.H.all.sub_run3_3bioreps.rds")
+
+pH.all.sub = ggplot(sigtab.H.all.sub, aes(y=Lowest_rank, x=log2FoldChange, color=Phylum, size=Mean.Abundance, shape = Substrate)) +
+  geom_vline(xintercept = c(0), linetype="dotted", color = "orange", size = 0.5) +
+  geom_vline(xintercept = c(-40,-20,20,40), color = "gray", size = 0.2) +
+  geom_point() + 
+  ggtitle("HDPE vs GLASS (Day 28,70,77)") +
+  xlim(-40, 40) +
+  scale_colour_manual(values=colors) + 
+  scale_fill_manual(values=colors) +
+  xlab("Log2foldchange") +
+  ylab("ASV (Lowest Assigned Taxonomic Rank)")
+pH.all.sub
+
+# LDPE v. GLASS (SE2, 4, 5 & 6)
+ps3.filt2.LDPE_GLASS <- BEE_ps3.pruned_filt2 %>% subset_samples(Substrate != "HDPE") %>%
+  subset_samples(Substrate != "PP") %>%
+  subset_samples(Substrate != "SW")
+
+ps3.filt2.LDPE_GLASS_SEsub <- ps3.filt2.LDPE_GLASS %>% 
+  subset_samples(Sampling.Event != "SE1") %>% 
+  subset_samples(Sampling.Event != "SE3") 
+diagdds.LDPE.sub = phyloseq_to_deseq2(ps3.filt2.LDPE_GLASS_SEsub, ~ Substrate)
+
+# calculate geometric means prior to estimate size factors
+gm_mean = function(x, na.rm=TRUE){
+  exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))
+}
+geoMeans.L.all.sub = apply(counts(diagdds.LDPE.sub), 1, gm_mean)
+diagdds.LDPE.sub = estimateSizeFactors(diagdds.LDPE.sub, geoMeans = geoMeans.L.all.sub)
+diagdds.LDPE.sub <- estimateDispersions(diagdds.LDPE.sub)
+diagdds.LDPE.sub <- nbinomWaldTest(diagdds.LDPE.sub)
+diagdds.LDPE.sub = DESeq(diagdds.LDPE.sub, fitType="local")
+res.L.all.sub = results(diagdds.LDPE.sub, cooksCutoff = FALSE)
+
+resLFC.L.all.sub <- lfcShrink(diagdds.LDPE.sub, coef= "Substrate_LDPE_vs_GLASS",type="apeglm")
+resLFC.L.all.sub
+plotDispEsts(diagdds.LDPE.sub)
+
+alpha = 0.05
+sigtab.L.all.sub = res.L.all.sub[which(res.L.all.sub$padj < alpha), ]
+ASV= rownames(sigtab.L.all.sub)
+sigtab.L.all.sub <- cbind(sigtab.L.all.sub, ASV) 
+sigtab.L.all.sub = cbind(as(sigtab.L.all.sub, "data.frame"), as(tax_table(ps3.filt3.LDPE_GLASS)[rownames(sigtab.L.all.sub), ], "matrix"))
+sigtab.L.all.sub
+
+#select taxa that are at least 3 fold enriched
+colnames(sigtab.L.all.sub) <- c("Mean.Abundance", "log2FoldChange", "lfcSE", "stat", "pvalue", "padj", "ASV", "Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+posigtab.L.all.sub = sigtab.L.all.sub[sigtab.L.all.sub[, "log2FoldChange"] > 3, ]
+posigtab.L.all.sub = posigtab.L.all.sub[, c("Mean.Abundance", "log2FoldChange", "lfcSE", "padj", "Phylum", "Class", "Order", "Family", "Genus", "ASV")]
+
+library("ggplot2")
+sigtabgen.L.all.sub = subset(sigtab.L.all.sub, !is.na(Genus))
+# Phylum order
+x = tapply(sigtabgen.L.all.sub$log2FoldChange, sigtabgen.L.all.sub$Phylum, function(x) max(x))
+x = sort(x, TRUE)
+sigtabgen.L.all.sub$Phylum = factor(as.character(sigtabgen.L.all.sub$Phylum), levels=names(x))
+# Genus order
+x = tapply(sigtabgen.L.all.sub$log2FoldChange, sigtabgen.L.all.sub$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtabgen.L.all.sub$Genus = factor(as.character(sigtabgen.L.all.sub$Genus), levels=names(x))
+sigtabgen.L.all.sub = subset(sigtabgen.L.all.sub, padj < 0.05)
+
+#Create new variable (Lowest rank) for plotting
+sigtab.L.all.sub$Genus <- sigtab.L.all.sub$Genus %>% str_replace_all("_"," ")
+sigtab.L.all.sub$Genus <- sigtab.L.all.sub$Genus %>% str_replace_all(" Genus","") %>% 
+  str_replace_all(" Family","") %>% 
+  str_replace_all(" Order","") %>% 
+  str_replace_all(" Class","") %>% 
+  str_replace_all(" Phylum","")
+
+sigtab.L.all.sub$Lowest_rank = ifelse(is.na(sigtab.L.all.sub$Genus), as.character(sigtab.L.all.sub$Family), ifelse(is.na(sigtab.L.all.sub$Family), as.character(sigtab.L.all.sub$Order), ifelse(is.na(sigtab.L.all.sub$Order), as.character(sigtab.L.all.sub$Class), ifelse(is.na(sigtab.L.all.sub$Class), as.character(sigtab.L.all.sub$Phylum), as.character(sigtab.L.all.sub$Genus)))))
+sigtab.L.all.sub$Lowest_rank = paste0(sigtab.L.all.sub$Lowest_rank," ", sigtab.L.all.sub$ASV)
+
+#sort taxa on sigtab
+# Phylum order
+x = tapply(sigtab.L.all.sub$log2FoldChange, sigtab.L.all.sub$Phylum, function(x) max(x))
+x = sort(x, TRUE)
+sigtab.L.all.sub$Phylum = factor(as.character(sigtab.L.all.sub$Phylum), levels=names(x))
+# Genus order
+x = tapply(sigtab.L.all.sub$log2FoldChange, sigtab.L.all.sub$Lowest_rank, function(x) max(x))
+x = sort(x, TRUE)
+sigtab.L.all.sub$Lowest_rank = factor(as.character(sigtab.L.all.sub$Lowest_rank), levels=names(x))
+sigtab.L.all.sub = subset(sigtab.L.all.sub, padj < 0.05)
+
+colors<-c("Firmicutes"="#009900","Bacteroidota"="#FF6666","Proteobacteria"="#3399FF", "Bdellovibrionota"="lightblue2", "Planctomycetota"="#c994c7", "Acidobacteriota"="mediumpurple4", "Verrucomicrobia"="#CD853F", "Actinobacteria"="#A0A0A0", "Cyanobacteria"="green4", "Campylobacteriota"="khaki4", "Desulfobacteriota"="midnightblue","Dadabacteria"="aquamarine4", "Fusobacteriota"="tomato4", "Myxococcota"="palevioletred", "Spirochaetota"="sienna","Patescibacteria"="slategrey", "Dependentiae"="slateblue3", "Deinococcota"="violet", "SAR324 clade(Marine group B)"="plum", "Gemmatimonadota"="yellow4","Chloroflexi"="springgreen1", "Calditrichota"="gold", "Latescibacterota"="firebrick", "WPS-2"="chartreuse","NB1-j"="darkseagreen","NA"="black")
+
+sigtab.L.all.sub <- sigtab.L.all.sub %>% 
+  mutate(Substrate = if_else(sigtab.L.all.sub$log2FoldChange < 0, "GLASS", "Polymer"))
+
+saveRDS(sigtab.L.all.sub, "sigtab.L.all.sub_run3_3bioreps.rds")
+
+pL.all.sub = ggplot(sigtab.L.all.sub, aes(y=Lowest_rank, x=log2FoldChange, color= Phylum, size=Mean.Abundance, shape = Substrate)) +
+  geom_vline(xintercept = c(0), linetype="dotted", color = "orange", size = 0.5) +
+  geom_vline(xintercept = c(-40,-20,20,40), color = "gray", size = 0.2)+
+  geom_point() + 
+  ggtitle("LDPE vs GLASS (Day 28,56:77)") +
+  xlim(-40, 40) +
+  scale_colour_manual(values=colors) + 
+  scale_fill_manual(values=colors) +
+  xlab("Log2foldchange") +
+  ylab("ASV (Lowest Assigned Taxonomic Rank)")
+pL.all.sub
+
+# PP v. GLASS (SE2, 4, 5 & 6) 
+ps3.filt2.PP_GLASS <-BEE_ps3.pruned_filt2 %>% subset_samples(Substrate != "HDPE") %>%
+  subset_samples(Substrate != "LDPE") %>%
+  subset_samples(Substrate != "SW")
+
+ps3.filt2.PP_GLASS_SEsub <- ps3.filt2.PP_GLASS %>% 
+  subset_samples(Sampling.Event != "SE1") %>% 
+  subset_samples(Sampling.Event != "SE3") 
+diagdds.PP.sub = phyloseq_to_deseq2(ps3.filt2.PP_GLASS_SEsub, ~ Substrate)
+
+# calculate geometric means prior to estimate size factors
+gm_mean = function(x, na.rm=TRUE){
+  exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))
+}
+geoMeans.P.all.sub = apply(counts(diagdds.PP.sub), 1, gm_mean)
+diagdds.PP.sub = estimateSizeFactors(diagdds.PP.sub, geoMeans = geoMeans.P.all.sub)
+diagdds.PP.sub <- estimateDispersions(diagdds.PP.sub)
+diagdds.PP.sub <- nbinomWaldTest(diagdds.PP.sub)
+diagdds.PP.sub = DESeq(diagdds.PP.sub, fitType="local")
+res.P.all.sub = results(diagdds.PP.sub, cooksCutoff = FALSE)
+
+resLFC.P.all.sub <- lfcShrink(diagdds.PP.sub, coef= "Substrate_PP_vs_GLASS",type="apeglm")
+resLFC.P.all.sub
+plotDispEsts(diagdds.PP.sub)
+
+alpha = 0.05
+sigtab.P.all.sub = res.P.all.sub[which(res.P.all.sub$padj < alpha), ]
+ASV= rownames(sigtab.P.all.sub)
+sigtab.P.all.sub <- cbind(sigtab.P.all.sub, ASV) 
+sigtab.P.all.sub = cbind(as(sigtab.P.all.sub, "data.frame"), as(tax_table(ps3.filt3.PP_GLASS)[rownames(sigtab.P.all.sub), ], "matrix"))
+sigtab.P.all.sub
+
+#select taxa that are at least 3 fold enriched
+colnames(sigtab.P.all.sub) <- c("Mean.Abundance", "log2FoldChange", "lfcSE", "stat", "pvalue", "padj", "ASV", "Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+posigtab.P.all.sub = sigtab.P.all.sub[sigtab.P.all.sub[, "log2FoldChange"] > 3, ]
+posigtab.P.all.sub = posigtab.P.all.sub[, c("Mean.Abundance", "log2FoldChange", "lfcSE", "padj", "Phylum", "Class", "Order", "Family", "Genus", "ASV")]
+
+library("ggplot2")
+sigtabgen.P.all.sub = subset(sigtab.P.all.sub, !is.na(Genus))
+# Phylum order
+x = tapply(sigtabgen.P.all.sub$log2FoldChange, sigtabgen.P.all.sub$Phylum, function(x) max(x))
+x = sort(x, TRUE)
+sigtabgen.P.all.sub$Phylum = factor(as.character(sigtabgen.P.all.sub$Phylum), levels=names(x))
+# Genus order
+x = tapply(sigtabgen.P.all.sub$log2FoldChange, sigtabgen.P.all.sub$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtabgen.P.all.sub$Genus = factor(as.character(sigtabgen.P.all.sub$Genus), levels=names(x))
+sigtabgen.P.all.sub = subset(sigtabgen.P.all.sub, padj < 0.05)
+#sigtab.P.all.sub$Taxa = paste0(sigtab.P.all.sub$Family, "_", sigtab.P.all.sub$Genus)
+
+#Create new variable (Lowest rank) for plotting
+sigtab.P.all.sub$Genus <- sigtab.P.all.sub$Genus %>% str_replace_all("_"," ")
+sigtab.P.all.sub$Genus <- sigtab.P.all.sub$Genus %>% str_replace_all(" Genus","") %>% 
+  str_replace_all(" Family","") %>% 
+  str_replace_all(" Order","") %>% 
+  str_replace_all(" Class","") %>% 
+  str_replace_all(" Phylum","")
+
+sigtab.P.all.sub$Lowest_rank = ifelse(is.na(sigtab.P.all.sub$Genus), as.character(sigtab.P.all.sub$Family), ifelse(is.na(sigtab.P.all.sub$Family), as.character(sigtab.P.all.sub$Order), ifelse(is.na(sigtab.P.all.sub$Order), as.character(sigtab.P.all.sub$Class), ifelse(is.na(sigtab.P.all.sub$Class), as.character(sigtab.P.all.sub$Phylum), as.character(sigtab.P.all.sub$Genus)))))
+
+sigtab.P.all.sub$Lowest_rank = paste0(sigtab.P.all.sub$Lowest_rank," ", sigtab.P.all.sub$ASV)
+
+#sort taxa on sigtab
+# Phylum order
+x = tapply(sigtab.P.all.sub$log2FoldChange, sigtab.P.all.sub$Phylum, function(x) max(x))
+x = sort(x, TRUE)
+sigtab.P.all.sub$Phylum = factor(as.character(sigtab.P.all.sub$Phylum), levels=names(x))
+# Genus order
+x = tapply(sigtab.P.all.sub$log2FoldChange, sigtab.P.all.sub$Lowest_rank, function(x) max(x))
+x = sort(x, TRUE)
+sigtab.P.all.sub$Lowest_rank = factor(as.character(sigtab.P.all.sub$Lowest_rank), levels=names(x))
+sigtab.P.all.sub = subset(sigtab.P.all.sub, padj < 0.05)
+
+colors<-c("Firmicutes"="#009900","Bacteroidota"="#FF6666","Proteobacteria"="#3399FF", "Bdellovibrionota"="lightblue2", "Planctomycetota"="#c994c7", "Acidobacteriota"="mediumpurple4", "Verrucomicrobia"="#CD853F", "Actinobacteria"="#A0A0A0", "Cyanobacteria"="green4", "Campylobacteriota"="khaki4", "Desulfobacteriota"="midnightblue","Dadabacteria"="aquamarine4", "Fusobacteriota"="tomato4", "Myxococcota"="palevioletred", "Spirochaetota"="sienna","Patescibacteria"="slategrey", "Dependentiae"="slateblue3", "Deinococcota"="violet", "SAR324 clade(Marine group B)"="plum", "Gemmatimonadota"="yellow4","Chloroflexi"="springgreen1", "Calditrichota"="gold", "Latescibacterota"="firebrick", "WPS-2"="chartreuse","NB1-j"="darkseagreen","NA"="black")
+
+sigtab.P.all.sub <- sigtab.P.all.sub %>% mutate(Substrate = if_else(sigtab.P.all.sub$log2FoldChange < 0, "GLASS", "Polymer"))
+saveRDS(sigtab.P.all.sub, "sigtab.P.all.sub_run3_3bioreps.rds") 
+
+pP.all.sub = ggplot(sigtab.P.all.sub, aes(y=Lowest_rank, x=log2FoldChange, color=Phylum, size=Mean.Abundance, shape = Substrate)) +
+  geom_vline(xintercept = c(0), linetype="dotted", color = "orange", size = 1) +
+  geom_vline(xintercept = c(-40,-20,20,40), color = "gray", size = 0.2)+
+  geom_point() + 
+  ggtitle("PP vs GLASS (Day 28,56:77)") +
+  xlim(-40, 40) +
+  scale_colour_manual(values=colors) + 
+  scale_fill_manual(values=colors) +
+  theme_gray(base_size = 12) +
+  xlab("Log2foldchange") +
+  ylab("ASV (Lowest Assigned Taxonomic Rank)")
+
+pP.all.sub
+
+# Combined the polymer diff abund ASVs into one DF
+sigtab.P.all.sub.t<-sigtab.P.all.sub
+sigtab.L.all.sub.t<-sigtab.L.all.sub
+sigtab.H.all.sub.t<-sigtab.H.all.sub
+sigtab.PL.all.sub<-rbind(sigtab.P.all.sub.t, sigtab.L.all.sub.t)
+sigtab.PLH.all.sub<-rbind(sigtab.PL.all.sub, sigtab.H.all.sub.t)
+
+# Plot all three Glass v polymer log2foldchange plots
+ASV.all.sub <-ggarrange(pH.all.sub, pL.all.sub, pP.all.sub, nrow = 1,  common.legend = TRUE, legend="bottom")
+
+# Determine Overall Big Changes: Filter out no large change and glass enriched ASVs
+# HDPE vs GLASS 
+bigChange.H.all.sub = subset(sigtab.H.all.sub, log2FoldChange > 1.8)
+# LDPE vs GLASS
+bigChange.L.all.sub = subset(sigtab.L.all.sub, log2FoldChange > 1.8)
+# PP vs GLASS
+bigChange.P.all.sub = subset(sigtab.P.all.sub, log2FoldChange > 1.8)
+
+#Combine for all-in-one plot 
+bigChange.H.all.sub$Substrate[bigChange.H.all.sub$Substrate=='Polymer']<-'HDPE Days 28,70,77'
+bigChange.L.all.sub$Substrate[bigChange.L.all.sub$Substrate=='Polymer']<-'LDPE Days 28,56:77'
+bigChange.P.all.sub$Substrate[bigChange.P.all.sub$Substrate=='Polymer']<-'PP Days 28,56:77'
+bigChange.PL.all.sub<-rbind(bigChange.P.all.sub, bigChange.L.all.sub)
+bigChange.PLH.all.sub<-rbind(bigChange.PL.all.sub, bigChange.H.all.sub)
+
+## Taxa enriched on Glass over the polymers (all)
+Glass vs. HDPE
+bigChange.GvH.all.sub = subset(sigtab.H.all.sub, log2FoldChange < -1.8)
+Glass vs. LDPE
+bigChange.GvL.all.sub = subset(sigtab.L.all.sub, log2FoldChange < -1.8)
+Glass vs. PP
+bigChange.GvP.all.sub = subset(sigtab.P.all.sub, log2FoldChange < -1.8)
+
+# What are this taxa?
+kable(bigChange.GvH.all.sub)
+kable(bigChange.GvL.all.sub)
+kable(bigChange.GvP.all.sub)
+kable(bigChange.H.all.sub)
+kable(bigChange.L.all.sub)
+kable(bigChange.P.all.sub)
+
+### GLASS Enriched ASV Plots
+# Glass v HDPE
+pGvH.all.bc.sub = ggplot(bigChange.GvH.all.sub, aes(y=Highest_rank, x=log2FoldChange, color=Phylum, size=baseMean)) + 
+  geom_vline(xintercept = c(0), linetype="dotted", color = "orange", size = 0.5) +
+  geom_vline(xintercept = c(-40,-20,20,40), color = "gray", size = 0.2)+
+  geom_point() + 
+  ggtitle("GLASS vs HDPE (SE2, 5, 6)") +
+  xlim(-40, 40) +
+  scale_colour_manual(values=colors) + 
+  scale_fill_manual(values=colors) +
+  xlab("Log2foldchange") +
+  ylab("Taxa (Lowest Rank)")
+pGvH.all.bc.sub
+
+# Glass v LDPE
+pGvL.all.bc.sub = ggplot(bigChange.GvL.all.sub, aes(y=Highest_rank, x=log2FoldChange, color=Phylum, size=baseMean)) + 
+  geom_vline(xintercept = c(0), linetype="dotted", color = "orange", size = 0.5) +
+  geom_vline(xintercept = c(-40,-20,20,40), color = "gray", size = 0.2)+
+  geom_point() + ggtitle("GLASS vs LDPE (SE2, 4, 5, 6)") +
+  xlim(-40, 40) +
+  scale_colour_manual(values=colors) + 
+  scale_fill_manual(values=colors) +
+  xlab("Log2foldchange") +
+  ylab("Taxa (Lowest Rank)")
+pGvL.all.bc.sub
+
+# Glass v PP
+pGvP.all.bc.sub = ggplot(bigChange.GvP.all.sub, aes(y=Highest_rank, x=log2FoldChange, color=Phylum, size=baseMean)) +
+  geom_vline(xintercept = c(0), linetype="dotted", color = "orange", size = 0.5) +
+  geom_vline(xintercept = c(-40,-20,20,40), color = "gray", size = 0.2)+
+  geom_point() + 
+  ggtitle("GLASS vs PP (SE2, 4, 5, 6)") +
+  xlim(-40, 40) +
+  scale_colour_manual(values=colors) + 
+  scale_fill_manual(values=colors) +
+  xlab("Log2foldchange") +
+  ylab("Taxa (Lowest Rank)")
+pGvP.all.bc.sub
+
+### Polyolefin enriched ASV Plots
+# HDPE Enriched
+pH.all.bc.sub = ggplot(bigChange.H.all.sub, aes(y=Lowest_rank, x=log2FoldChange, color=Phylum, size=Mean.Abundance)) +
+  geom_vline(xintercept = c(0), linetype="dotted", color = "orange", size = 0.75) +
+  geom_vline(xintercept = c(-40,-20,20,40), color = "gray", size = 0.2)+
+  geom_point() + 
+  ggtitle("HDPE vs GLASS (SE2, 5, 6)") +
+  xlab("Log2foldchange") +
+  ylab("ASV (Lowest Assigned Taxonomic Rank)")
+pH.all.bc.sub
+
+#LDPE Enriched
+pL.all.bc.sub = ggplot(bigChange.L.all.sub, aes(y=Lowest_rank, x=log2FoldChange, color=Phylum, size=Mean.Abundance)) + geom_vline(xintercept = c(0), linetype="dotted", color = "darkorange", size = 0.75) + 
+  geom_vline(xintercept = c(-40,-20,20,40), color = "gray", size = 0.2) +
+  geom_point() + ggtitle("LDPE vs GLASS (Day 28,56:77)") +
+  xlim(-40, 40) +
+  scale_colour_manual(values=colors) + 
+  scale_fill_manual(values=colors) +
+  xlab("Log2foldchange") +
+  ylab("ASV (Lowest Assigned Taxonomic Rank)")
+pL.all.bc.sub
+
+#PP Enriched
+pP.all.bc.sub = ggplot(bigChange.P.all.sub, aes(y=Lowest_rank, x=log2FoldChange, color=Phylum, size=Mean.Abundance)) + geom_vline(xintercept = c(0), linetype="dotted", color = "orange", size = 0.75) +
+  geom_vline(xintercept = c(-40,-20,20,40), color = "gray", size = 0.2) +
+  geom_point() + ggtitle("PP vs GLASS (Day 28:77)") +
+  xlim(-40, 40) +
+  scale_colour_manual(values=colors) + 
+  scale_fill_manual(values=colors) + 
+  xlab("Log2foldchange") +
+  ylab("ASV (Lowest Assigned Taxonomic Rank)")
+pP.all.bc.sub
+
+# All together (using combined bigchange data, separated by substrate type)
+colors<-c("Deinococci"="#009900","Bdellovibrionia"="#FF6666","Alphaproteobacteria"="#3399FF", "Gammaproteobacteria"="orange3","BD7-11"="mediumpurple4")
+
+pPLH.all.bc.sub = ggplot(bigChange.PLH.all.sub, aes(y=Lowest_rank, x=log2FoldChange, color=Class, size=Mean.Abundance, shape=Substrate)) + 
+  geom_vline(xintercept = c(10,20,30), color = "gray", size = 0.2)+
+  geom_point() +
+  xlim(0, 30) +
+  theme_bw(base_size = 14) +
+  scale_shape_manual(values = c(16, 18, 15)) +  
+  scale_colour_manual(values=colors) + 
+  scale_fill_manual(values=colors) +
+       xlab("Log2foldchange") +
+       ylab("ASV (Lowest Assigned Taxonomic Rank)")
+pPLH.all.bc.sub
+```
+
+```{r}
+### Extracting Significantly enriched ASVs from DESeq2 Output
+## HDPE (all SE with three bio reps)
+h2<- c(rownames(bigChange.H.2))
+h5<- c(rownames(bigChange.H.5))
+h6<- c(rownames(bigChange.H.6))
+HDPE_sig_ASVs<-list("HDPE_SE2" = h2,
+                       "HDPE_SE5" = h5,
+                       "HDPE_SE6" = h6)
+summary(HDPE_sig_ASVs)
+
+# Unique sig ASVs from HDPE
+un.hs <- unlist(HDPE_sig_ASVs)
+res.hs <- Map(`[`, HDPE_sig_ASVs, relist(!duplicated(un.hs), skeleton = HDPE_sig_ASVs))
+summary(res.hs)
+
+# Seperate/unlist from groups (SEs) to assess unique sequences
+sig.ASVs.HDPE <- res.hs %>% unlist() %>% as.vector() %>% str_sort(numeric = TRUE)
+sig.ASVs.HDPE.unique<- unique(sig.ASVs.HDPE)
+summary(sig.ASVs.HDPE.unique)
+
+## LDPE
+l2<- c(rownames(bigChange.L.2))
+l4<- c(rownames(bigChange.L.4))
+l5<- c(rownames(bigChange.L.5))
+l6<- c(rownames(bigChange.L.6))
+LDPE_sig_ASVs<-list("LDPE_SE2" = l2,
+                       "LDPE_SE4" = l4,
+                       "LDPE_SE5" = l5,
+                       "LDPE_SE6" = l6)
+summary(LDPE_sig_ASVs)
+
+# Unique sig ASVs from LDPE
+un.ls <- unlist(LDPE_sig_ASVs)
+res.ls <- Map(`[`, LDPE_sig_ASVs, relist(!duplicated(un.ls), skeleton = LDPE_sig_ASVs))
+summary(res.ls)
+
+# Seperate/unlist from groups (SEs) to assess unique sequences
+sig.ASVs.LDPE <- res.ls %>% unlist() %>% as.vector() %>% str_sort(numeric = TRUE)
+sig.ASVs.LDPE.unique<- unique(sig.ASVs.LDPE)
+summary(sig.ASVs.LDPE.unique)
+
+## PP
+p4<- c(rownames(bigChange.P.4))
+p5<- c(rownames(bigChange.P.5))
+p6<- c(rownames(bigChange.P.6))
+PP_sig_ASVs<-list("PP_SE4" = p4,
+                       "PP_SE5" = p5,
+                       "PP_SE6" = p6)
+summary(PP_sig_ASVs)
+
+# Unique sig ASVs from PP
+un.ps <- unlist(PP_sig_ASVs)
+res.ps <- Map(`[`, PP_sig_ASVs, relist(!duplicated(un.ps), skeleton = PP_sig_ASVs))
+summary(res.ps)
+
+# Seperate/unlist from groups (SEs) to assess unique sequences
+sig.ASVs.PP <- res.ps %>% unlist() %>% as.vector() %>% str_sort(numeric = TRUE)
+sig.ASVs.PP.unique<- unique(sig.ASVs.PP)
+summary(sig.ASVs.PP.unique)
+
+## Add ASV# from ps object to signifcant taxa
+# HDPE
+names.ps
+Seqs.sig.HDPE = names.ps[names.ps$seq %in% sig.ASVs.HDPE.unique,]
+head(Seqs.sig.HDPE)
+
+# LDPE
+Seqs.sig.LDPE = names.ps[names.ps$seq %in% sig.ASVs.LDPE.unique,]
+head(Seqs.sig.LDPE)
+
+# PP
+Seqs.sig.PP = names.ps[names.ps$seq %in% sig.ASVs.PP.unique,]
+head(Seqs.sig.PP)
+
+# Use ASV labeled significant taxa list to subset PS object to only include sig taxa
+sig.asvs.HDPE.vec<- as.vector(Seqs.sig.HDPE$asv)
+sig.asvs.LDPE.vec<- as.vector(Seqs.sig.LDPE$asv)
+sig.asvs.PP.vec<- as.vector(Seqs.sig.PP$asv)
+
+HDPE.Sig.ASVs <- BEE_ps3.pruned_filt2 %>% subset_taxa(ASV %in% sig.asvs.HDPE.vec)
+HDPE.Sig.ASVs
+saveRDS(HDPE.Sig.ASVs, "BEE21_HDPE_Sig_ASVs_ps3.rds")
+
+LDPE.Sig.ASVs <- BEE_ps3.pruned_filt2 %>% subset_taxa(ASV %in% sig.asvs.LDPE.vec)
+LDPE.Sig.ASVs
+saveRDS(LDPE.Sig.ASVs, "BEE21_LDPE_Sig_ASVs_ps3.rds")
+
+PP.Sig.ASVs <- BEE_ps3.pruned_filt2 %>% subset_taxa(ASV %in% sig.asvs.PP.vec)
+PP.Sig.ASVs
+saveRDS(PP.Sig.ASVs, "BEE21_PP_Sig_ASVs_ps3.rds")
+
+# Merge ps objects
+HDPE_LDPE_sigs <- merge_phyloseq(BEE21_HDPE_Sig_ASVs_ps3, BEE21_LDPE_Sig_ASVs_ps3)
+Polymer_sigs.ASVs <- merge_phyloseq(HDPE_LDPE_sigs, BEE21_PP_Sig_ASVs_ps3)
+
+## Combine all sigificant ASVs and extract unique (remove duplicates)
+res.hlp.sig<-combine(res.hs, res.ls, res.ps)
+sig.ASVs.all <- res.hlp.sig %>% unlist() %>% as.vector() %>% str_sort(numeric = TRUE)
+sig.ASVs.unique<- unique(sig.ASVs.all)
+
+## Access & Extract sequence info (Add ASV # from ps object to signifcant taxa)
+# After the original name.ps file is filtered to only include the sig taxa, export the table as a .csv file and use an online csv to fasta converter to make the fastA file.
+names.ps
+significant.polymer.enriched.Seqs = names.ps[names.ps$seq %in% sig.ASVs.unique,]
+head(significant.polymer.enriched.Seqs)
+write.csv(significant.polymer.enriched.Seqs, file='BEE21_sig_polymer_enriched_sequences.csv')
