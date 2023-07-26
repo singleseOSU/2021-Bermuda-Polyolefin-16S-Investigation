@@ -1,0 +1,94 @@
+## DADA2 Pipeline
+
+# Download Package
+library(dada2); packageVersion("dada2")
+
+# Set Path to directory where FastQ files are located
+path<-"Insert path to FastQ files"
+list.files(path)
+
+# Perform String manipulations to get matched lists of forward & rever fastQ files
+# Forward and reverse fastq filenames have format: SAMPLENAME_R1_001.fastq and SAMPLENAME_R2_001.fastq
+fnFs <- sort(list.files(path, pattern="_R1_001.fastq", full.names = TRUE))
+fnRs <- sort(list.files(path, pattern="_R2_001.fastq", full.names = TRUE))
+
+# Extract sample names, assuming filenames have format: SAMPLENAME_XXX.fastq
+sample.names <- sapply(strsplit(basename(fnFs), "_R"), `[`, 1)
+sample.names
+
+# Inspect read quality profiles (make heat map of the frequency of each quality score at each base position.)
+plotQualityProfile(fnFs[1:2])
+
+#Now visualize the quality profile of the reverse reads:
+plotQualityProfile(fnRs[1:4])
+
+#Filter and Trim (Assign file names for the filtered fast.gz files & Place filtered files in filtered/ subdirectory)
+filtFs <- file.path(path, "filtered", paste0(sample.names, "_F_filt.fastq.gz"))
+filtRs <- file.path(path, "filtered", paste0(sample.names, "_R_filt.fastq.gz"))
+names(filtFs) <- sample.names
+names(filtRs) <- sample.names
+filtFs
+
+# Filter (using standard filtering parameters: maxN=0, truncQ=2, rm.phix=TRUE and maxEE=2)
+out<-filterAndTrim(fnFs, filtFs, fnRs, filtRs, truncLen=c(240,200),
+                    maxN=0, maxEE=c(2,2), truncQ=2, rm.phix=TRUE,
+                    compress=TRUE, multithread=TRUE) # On Windows set multithread=FALSE
+
+#Learning the Error Rates 
+errF <- learnErrors(filtFs, multithread=TRUE)
+errR <- learnErrors(filtRs, multithread=TRUE)
+plotErrors(errF, nominalQ=TRUE) 
+
+# Sample Inference 
+dadaFs <- dada(filtFs, err=errF, multithread=TRUE)
+dadaRs <- dada(filtRs, err=errR, multithread=TRUE)
+saveRDS(dadaFs, "dadaFs.rds")
+saveRDS(dadaRs, "dadaRs.rds")
+
+# Inspect the returned dada-class object
+dadaFs[[1]]
+
+# Merge paired reads (performed by aligning the denoised Forward reads with the reverse-compliment and then constructing the merged “contain” sequences. By default, merged sequences are only output if the forward and reverse reads overlap by at least 12 bp.
+mergers <- mergePairs(dadaFs, filtFs, dadaRs, filtRs, verbose=TRUE)
+saveRDS(mergers, "mergers.rds")
+
+# Inspect the merger data.frame from the first sample
+head(mergers[[1]])
+
+#Construct sequence table (ASV table; The sequence table is a matrix with rows corresponding to (and named by) the samples, and columns corresponding to (and named by) the sequence variants)
+seqtab <- makeSequenceTable(mergers)
+dim(seqtab)
+saveRDS(seqtab, "seqtab.rds")
+
+# Inspect distribution of sequence lengths
+table(nchar(getSequences(seqtab)))
+
+#Remove chimeras (Chimeric sequences are identified if they can be exactly reconstructed by combining a left-segment and a right-segment from two more abundant “parent” sequences.)
+seqtab.nochim <- removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, verbose=TRUE)
+dim(seqtab.nochim)
+saveRDS(seqtab.nochim, "seqtab.nochim.rds")
+sum(seqtab.nochim)/sum(seqtab)
+### Note: Most of your reads should remain after chimera removal (it is not uncommon for a majority of sequence variants to be removed though). If most of your reads were removed as chimeric, upstream processing may need to be revisited. In almost all cases this is caused by primer sequences with ambiguous nucleotides that were not removed prior to beginning the DADA2 pipeline
+
+#Track reads through the pipeline (a final check to observe the # of reads that made it through each step of the pipeline)
+getN <- function(x) sum(getUniques(x))
+track <- cbind(out, sapply(dadaFs, getN), sapply(dadaRs, getN), sapply(mergers, getN), rowSums(seqtab.nochim))
+# If processing a single sample, remove the sapply calls: e.g. replace sapply(dadaFs, getN) with getN(dadaFs)
+colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+rownames(track) <- sample.names
+head(track)
+
+#Assign taxonomy (The assignTaxonomy function takes as input a set of sequences to be classified and a training set of reference sequences with known taxonomy, and outputs taxonomic assignments with at least minBoot bootstrap confidence. To continue, download the silva_nr_v132_train_set.fa.gz file, and place it in the directory with the fastq files.
+taxa <- assignTaxonomy(seqtab.nochim, "Path to silva_nr99_v138.1_train_set.fa", multithread=TRUE)
+
+#Assign Species
+taxa <- addSpecies(taxa, "Path to silva_species_assignment_v138.1.fa")
+saveRDS(taxa, "taxa.rds")
+
+# Inspect the taxonomic assignments
+taxa.print <- taxa  # Removing sequence rownames for display only
+rownames(taxa.print) <- NULL
+head(taxa.print)
+
+#Export Fasta file
+uniquesToFasta(getUniques(seqtab.nochim2), fout="Path to fasta files", ids=paste0("Seq", seq(length(getUniques(seqtab.nochim)))))
