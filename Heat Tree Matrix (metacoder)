@@ -1,0 +1,57 @@
+### Metacoder generated Heat Tree Matrix
+library(metacoder)
+library(microViz)
+library(tibble)
+library(purrr)
+library(phyloseq)
+
+# Subset out SW and SE1 
+Polymer_sigs.ASVs.noGlassSW <- Polymer_sigs.ASVs %>% subset_samples(Sampling.Event != "SE1") %>% 
+  subset_samples(Substrate != "SW") %>% subset_samples(Substrate != "GLASS") %>% tax_fix(unknowns = c("NA_Genus", "Unknown Family_Genus", "Unknown Family Family", "Unknown Family", "Unknown Family_Genus Genus", "Unknown Family_Genus Genus Species", "Unknown"))
+Polymer_sigs.ASVs.noGlassSW 
+
+# Remove specific tax-levels from ps object ("Species")
+tax_table(Polymer_sigs.ASVs.noGlassSW) <- tax_table(Polymer_sigs.ASVs.noGlassSW)[,-7]
+
+# Convert Taxmap object
+Polymer.Taxmap.sigEnrich <- Polymer_sigs.ASVs.noGlassSW %>% ps_get %>% parse_phyloseq()
+
+# Get per-taxon counts
+Polymer.Taxmap.sigEnrich2$data$tax_table <- calc_taxon_abund(Polymer.Taxmap.sigEnrich, data = "otu_table", cols = Polymer.Taxmap.sigEnrich2$data$sample_data$sample_id)
+
+# Calculate difference between groups
+Polymer.Taxmap.sigEnrich$data$diff_table_Substrate <- calc_diff_abund_deseq2(Polymer.Taxmap.sigEnrich, data = "tax_table",
+                                    cols = Polymer.Taxmap.sigEnrich$data$sample_data$sample_id,
+                                    groups = Polymer.Taxmap.sigEnrich$data$sample_data$Substrate)
+
+# Calculate minimum PID per sample
+Polymer.Taxmap.sigEnrich$data$min_pid <- map_dbl(obs(Polymer.Taxmap.sigEnrich, data = "diff_table_Substrate", value = "padj"), min, na.rm = TRUE)
+
+dont_print <- c("unknown", "unidentified", "Saprospiraceae Family", "Flavobacteriales Order", "Chitinophagales Order", "Flammeovirgaceae Family", "Cyclobacteriaceae Family", "Chlamydiales Order", "PB19 Order", "Bacteria Kingdom", "NB1-j Phylum", "Vermiphilaceae Family", "Babeliales Order", "Subgroup 22 Class", "BD2-11 terrestrial group Class", "Gracilibacteria Class", "Cyanobacteriia Class", "Vampirovibrionales Order", "Legionellaceae Family", "Gammaproteobacteria Class", "Pseudomonadales Order", "KI89A clade Family", "Gammaproteobacteria Incertae Sedis Order", "Diplorickettsiaceae Family", "CHAB-XI-27 Order", "Rhodobacteraceae Family", "Rickettsiales Order", "SM2D12 Family", "Fokiniaceae Family", "Micavibrionaceae Family", "Micavibrionales Order", "Rhizobiales Order", "Hyphomonadaceae Family", "Alphaproteobacteria Class", "Parvibaculaceae Family", "Rhodospirillales Order", "Terasakiellaceae Family", "Alphaproteobacteria Incertae Sedis Order", "Oligoflexaceae Family", "Gammaproteobacteria Incertae Sedis", "Alphaproteobacteria Incertae Sedis", "Rickettsiaceae Family", "SM2D12", "CHAB-XI-27 Order", "B2706-C7", "SM1A02", "OM27 clade", "OM75 clade", "MD3-55", "CHAB-I-5 lineage", "BD1-7 clade", "BD2-7 Family", "KI89A clade", "NB1-j", "Subgroup 22", "PB19", "Roseobacter clade CHAB-I-5 lineage", "CHAB-XI-27","BD2-11 terrestrial group", "Halieaceae Family", "Synechococcus CC9902", "BD2-7")
+
+Colored_labels <- c("Gammaproteobacteria" = "red", "Alphaproteobacteria" = "blue1")
+
+Polymer.Taxmap.sigEnrich_sigfiltered <- Polymer.Taxmap.sigEnrich %>% 
+  metacoder::filter_taxa(., min_pid < 0.05, reassign_obs = FALSE, drop_obs = TRUE)
+
+print <- c(Polymer.Taxmap.sigEnrich_sigfiltered$data$tax_data$ASV) %>% unique()
+
+# Plot results with minimum PID filter
+set.seed(2)
+Polymer.sigEnrich.HTM <- Polymer.Taxmap.sigEnrich %>% 
+  metacoder::filter_taxa(., min_pid < 0.05, reassign_obs = FALSE, drop_obs = TRUE) %>%
+  heat_tree_matrix(., data = "diff_table_Substrate",
+                 node_size = n_subtaxa,
+                 node_label = ifelse(taxon_names %in% dont_print, "", taxon_names),
+                 key_size = 0.65,
+                 node_label_size_range = c(0.01, 0.04),
+                 node_color = ifelse(is.na(padj) | padj > 0.05, 0, log2FoldChange),
+                 node_color_range = diverging_palette(),
+                 node_color_trans = "linear",
+                 node_color_interval = c(-3, 3),
+                 edge_color_interval = c(-3, 3),
+                 node_size_axis_label = "Number of ASVs",
+                 node_color_axis_label = "Log2 fold change",
+                 overlap_avoidance = 0.8,
+                 repel_force = 2)
+Polymer.sigEnrich.HTM %>% ggsave(., filename = "HTM_PolyolefinsVSPolyolefins.png",width = 7, height = 7, dpi=600, bg = "white")
